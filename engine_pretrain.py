@@ -11,80 +11,37 @@
 import os
 import math
 import sys
+import imageio
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Iterable
+from PIL import Image
 
 import torch
+from torchvision.transforms.functional import to_pil_image
 
 import util.misc as misc
 import util.lr_sched as lr_sched
-from util.custom import calc_for_diffmae
+from util.loss import calc_for_diffmae
 
-def visualize(args, model, samples, visible_input, pred, ids_restore, mask, iter, data_iter_step, mode='train'):
-    if data_iter_step % 20 != 0: # only plot every 20 iteration steps
-        return
+def concat_images_horizontally(image_list):
+    widths, heights = zip(*(img.size for img in image_list))
     
-    if args.multi_gpu:
-        model = model.module
-  
-    pred = torch.cat([visible_input, pred], dim=1)
-    pred = torch.gather(pred, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, pred.shape[2])) # to unshuffle
-    pred = model.unpatchify(pred)
+    total_width = sum(widths)
+    max_height = max(heights)
+    
+    new_img = Image.new('RGB', (total_width, max_height))
+    
+    x_offset = 0
+    for img in image_list:
+        new_img.paste(img, (x_offset, 0))
+        x_offset += img.width
+    
+    return new_img
 
-    # the first sample of a mini-batch, the first feature
-    vis_target = np.array(samples[0, :, 0].cpu().detach())
-    vis_pred = np.array(pred[0, :, 0].cpu().detach())
-
-    t = np.arange(int(samples.shape[1]))
-
-    fig, axs = plt.subplots(2,1)
-    fig.tight_layout(pad=2)
-
-    axs[0].plot(t,vis_target)
-    axs[0].set_title('ground truth sequence')
-
-    axs[1].plot(t,vis_pred)
-    axs[1].set_title('predicted sequence')
-
-    """ gray area generation """
-
-    mask_ = torch.ones(samples.shape[0], samples.shape[1]).to(args.device)
-
-    for b in range(samples.shape[0]):
-        for n in range(args.input_length):
-            index = n // args.patch_size
-            mask_[b, n] *= mask[b, index]
-
-    start_idx, final_idx = 0, 0
-    start_prev, final_prev = 99999, 99999
-    for i in range(len(mask_[0, :])-1):
-        if i == 0 or (mask_[0, i] == 1.0 and mask_[0, i-1] == 0.0):
-            start_idx = i
-        elif mask_[0, i] == 1.0 and mask_[0, i+1] == 0.0:
-            final_idx = i
-        elif i == len(mask_[0, :])-2 and mask_[0, i] == 1.0:
-            final_idx = i
-        
-        if start_idx < final_idx and (start_prev != start_idx and final_prev != final_idx):
-
-            plt.axvspan(start_idx, final_idx, facecolor='gray', alpha=0.2)
-
-            start_prev = start_idx 
-            final_prev = final_idx
-
-    """ done """
-
-    folder = '{}/{}_plot'.format(args.savedir, mode)
-    os.makedirs(folder, exist_ok=True)
-
-    if mode == 'train' or 'val':
-        plt.savefig('{}/comparison_{}epoch_{}batch.png'.format(folder, iter, data_iter_step))
-    else:
-        plt.savefig('{}/comparison_{}batch.png'.format(folder, data_iter_step))
-    plt.cla()   # clear the current axes
-    plt.clf()   # clear the current figure
-    plt.close() # closes the current figure
+def denormalize(tensor):
+    tensor = tensor * 0.5 + 0.5
+    return tensor
 
 def train_one_epoch(model: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
@@ -96,7 +53,7 @@ def train_one_epoch(model: torch.nn.Module,
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 50
+    print_freq = 100
 
     accum_iter = args.accum_iter
 
@@ -106,7 +63,6 @@ def train_one_epoch(model: torch.nn.Module,
         print('log_dir: {}'.format(log_writer.log_dir))
 
     for data_iter_step, (samples, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-
         # we use a per iteration (instead of per epoch) lr scheduler
         if data_iter_step % accum_iter == 0:
             lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
@@ -114,10 +70,8 @@ def train_one_epoch(model: torch.nn.Module,
         samples = samples.to(args.device, non_blocking=True)
 
         with torch.cuda.amp.autocast():
-            pred, visible_token, ids_masked, ids_restore, mask = model(samples)
+            pred, ids_restore, mask, ids_masked, _ = model(samples)
             loss = calc_for_diffmae(args, model, samples, pred, ids_restore, ids_masked)
-
-        visualize(args, model, samples, visible_token, pred, ids_restore, mask, epoch, data_iter_step, mode='train')
 
         loss_value = loss.item()
 
@@ -150,7 +104,7 @@ def train_one_epoch(model: torch.nn.Module,
 
 
     # gather the stats from all processes
-    # metric_logger.synchronize_between_processes()
+    metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
@@ -176,10 +130,8 @@ def evaluate(model: torch.nn.Module,
         samples = samples.to(args.device, non_blocking=True)
 
         with torch.cuda.amp.autocast():
-            pred, visible_token, ids_masked, ids_restore, mask = model(samples)
+            pred, ids_restore, mask, ids_masked, ids_keep = model(samples)
             loss = calc_for_diffmae(args, model, samples, pred, ids_restore, ids_masked)
-
-        visualize(args, model, samples, visible_token, pred, ids_restore, mask, epoch, data_iter_step, mode='test')
 
         loss_value = loss.item()
 
@@ -187,8 +139,36 @@ def evaluate(model: torch.nn.Module,
 
         metric_logger.update(loss=loss_value)
 
+        if args.sampling and data_iter_step % 100 == 0:
+            for n in range(pred.size()[0]):
+                if n % 100 == 0:
+                    sampled_token = model.diffusion.sample(pred[n].unsqueeze(0))
+                    sampled_token = sampled_token.squeeze()
+                    if args.multi_gpu:
+                        visible_tokens = model.module.patchify(samples)
+                    else:
+                        visible_tokens = model.patchify(samples)
+
+                    visible_tokens = torch.gather(visible_tokens, dim=1, index=ids_keep[:, :, None].expand(-1, -1, visible_tokens.shape[2]))
+                    img = torch.cat([visible_tokens[n], sampled_token], dim=0)
+                    img = torch.gather(img, dim=0, index=ids_restore[n].unsqueeze(-1).repeat(1, img.shape[1])) # to unshuffle
+                    img = model.unpatchify(img.unsqueeze(0))
+                    
+                    img = denormalize(img)
+                    samples = denormalize(samples)
+                
+                    img_array = img.squeeze(0).permute(1, 2, 0).detach().cpu().numpy()  # (n_channels, height, width) -> (height, width, n_channels)
+                    org_array = samples[n].squeeze(0).permute(1, 2, 0).detach().cpu().numpy()
+                    # org_img = to_pil_image(samples[n] * 255)
+                    org_img = Image.fromarray((org_array * 255).astype(np.uint8))
+                    img = Image.fromarray((img_array * 255).astype(np.uint8))
+
+                    images = [org_img, img]
+                    concatenated_image_horizontal = concat_images_horizontally(images)
+                    concatenated_image_horizontal.save('{}\\sample\\output_{}_{}.png'.format(args.savedir, data_iter_step, n))
+
     # gather the stats from all processes
-    # metric_logger.synchronize_between_processes()
+    metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}

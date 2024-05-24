@@ -20,14 +20,16 @@ class Options():
     def initialize(self, parser):
         parser.add_argument('--batch_size', default=64, type=int,
                         help='Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus')
-        parser.add_argument('--timesteps', default=128, type=int)
         parser.add_argument('--epochs', default=100, type=int)
+        parser.add_argument('--save_freq', default=10, type=int)
 
         # Model parameters
-        parser.add_argument('--model', default='mae', type=str, metavar='MODEL',
+        parser.add_argument('--model', default='diffmae', type=str, metavar='MODEL',
                             help='Name of model to train')
-        parser.add_argument('--input_length', default=128, type=int,
-                            help='input sequence length')
+        parser.add_argument('--depth', default=8, type=int)
+        parser.add_argument('--num_heads', default=8, type=int)
+        parser.add_argument('--img_size', default=224, type=int,
+                            help='input image size')
         parser.add_argument('--mask_ratio', default=0.75, type=float,
                             help='Masking ratio (percentage of removed patches).')
         parser.add_argument('--norm_pix_loss', action='store_true',
@@ -52,7 +54,7 @@ class Options():
 
         # Dataset parameters
         parser.add_argument('--patch_size', default=8, type=int)
-        parser.add_argument('--data_path', default='../../data/dts/HAR/', type=str,
+        parser.add_argument('--data_path', default='../../data/', type=str,
                             help='dataset path')
         parser.add_argument('--dataset', type=str, required=True,
                             help='name of dataset')
@@ -77,16 +79,16 @@ class Options():
         parser.add_argument('--no_pin_mem', action='store_false', dest='pin_mem')
         parser.set_defaults(pin_mem=True)
 
-        parser.add_argument('--n_feats', type=int, default=9,
-                            help='number of features, default=9')
-        parser.add_argument('--n_classes', type=int, default=6,
-                            help='number of classes, default=6')
+        parser.add_argument('--n_channels', type=int, default=3,
+                            help='number of features, default=3')
+        parser.add_argument('--n_classes', type=int, default=10,
+                            help='number of classes, default=10')
         
         # Training parameters
         parser.add_argument('--accum_iter', default=1, type=int,
                         help='Accumulate gradient iterations (for increasing the effective batch size under memory constraints)')
         parser.add_argument('--mode', type=str, choices=['pretrain', 'finetune'])
-        parser.add_argument('--emb_dim', type=int, default=4096,
+        parser.add_argument('--emb_dim', type=int, default=1024,
                             help='feature dimension for embedding')
         parser.add_argument('--dec_emb_dim', type=int, default=512,
                             help='feature dimension for decoder embedding')
@@ -97,6 +99,8 @@ class Options():
             help='gpu ids: e.g. 0  0,1,2, 0,2. use [] for CPU')
 
         parser.add_argument('--dist_on_itp', action='store_true')
+
+        parser.add_argument('--sampling', action='store_true')
         self.initialized = True
         return parser
 
@@ -104,6 +108,7 @@ class Options():
         note = input("Anything to note: ")
 
         os.makedirs(args.savedir, exist_ok=True)
+        os.makedirs('{}\\sample'.format(args.savedir, exist_ok=True))
         config_file = args.savedir + "/config.txt"
         with open(config_file, 'w') as f:
             json.dump(args.__dict__, f, indent=2)
