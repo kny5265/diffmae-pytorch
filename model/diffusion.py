@@ -1,3 +1,8 @@
+"""
+This code is based from
+https://github.com/taki0112/diffusion-pytorch
+"""
+
 import os
 import torch
 import torch.nn as nn
