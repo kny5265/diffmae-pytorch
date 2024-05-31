@@ -168,7 +168,7 @@ def evaluate(model: torch.nn.Module,
 
                     images = [org_img, img]
                     concatenated_image_horizontal = concat_images_horizontally(images)
-                    concatenated_image_horizontal.save('{}\\sample\\output_{}_{}.png'.format(args.savedir, data_iter_step, n))
+                    concatenated_image_horizontal.save('{}/sample/output_{}_{}.png'.format(args.savedir, data_iter_step, n))
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
