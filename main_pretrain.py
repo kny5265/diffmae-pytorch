@@ -56,7 +56,7 @@ def main(args):
 
     loss_scaler = NativeScaler()
 
-    if args.resume: # 전에 저장된 checkpoint부터 이어서 학습하고싶은 경우 실행
+    if args.resume:
         misc.load_model(args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler)
 
     print(f"Start training for {args.epochs} epochs")
@@ -71,7 +71,7 @@ def main(args):
         )
         if args.output_dir and (epoch % args.save_freq == 0 or epoch + 1 == args.epochs):
             misc.save_model(
-                args=args, model=model, model_without_ddp=model, optimizer=optimizer,
+                args=args, model=model, optimizer=optimizer,
                 loss_scaler=loss_scaler, epoch=epoch)
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
