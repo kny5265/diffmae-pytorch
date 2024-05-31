@@ -116,6 +116,7 @@ def evaluate(model: torch.nn.Module,
                     args=None):
     
     model.eval()
+
     metric_logger = misc.MetricLogger(delimiter="  ")
     header = 'Test: '
     print_freq = 20
@@ -140,19 +141,21 @@ def evaluate(model: torch.nn.Module,
         metric_logger.update(loss=loss_value)
 
         if args.sampling and data_iter_step % 100 == 0:
+            if args.multi_gpu:
+                model_ = model.module
+            else:
+                model_ = model
+
             for n in range(pred.size()[0]):
                 if n % 100 == 0:
-                    sampled_token = model.diffusion.sample(pred[n].unsqueeze(0))
+                    sampled_token = model_.diffusion.sample(pred[n].unsqueeze(0))
                     sampled_token = sampled_token.squeeze()
-                    if args.multi_gpu:
-                        visible_tokens = model.module.patchify(samples)
-                    else:
-                        visible_tokens = model.patchify(samples)
+                    visible_tokens = model_.patchify(samples)
 
                     visible_tokens = torch.gather(visible_tokens, dim=1, index=ids_keep[:, :, None].expand(-1, -1, visible_tokens.shape[2]))
                     img = torch.cat([visible_tokens[n], sampled_token], dim=0)
                     img = torch.gather(img, dim=0, index=ids_restore[n].unsqueeze(-1).repeat(1, img.shape[1])) # to unshuffle
-                    img = model.unpatchify(img.unsqueeze(0))
+                    img = model_.unpatchify(img.unsqueeze(0))
                     
                     img = denormalize(img)
                     samples = denormalize(samples)
