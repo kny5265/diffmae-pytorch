@@ -108,7 +108,7 @@ class Options():
         note = input("Anything to note: ")
 
         os.makedirs(args.savedir, exist_ok=True)
-        os.makedirs('{}\\sample'.format(args.savedir, exist_ok=True))
+        os.makedirs('{}/sample'.format(args.savedir, exist_ok=True))
         config_file = args.savedir + "/config.txt"
         with open(config_file, 'w') as f:
             json.dump(args.__dict__, f, indent=2)
