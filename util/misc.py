@@ -18,6 +18,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 
 import torch
+import torch.nn as nn
 import torch.distributed as dist
 from torch._six import inf
 
@@ -294,16 +295,28 @@ def get_grad_norm_(parameters, norm_type: float = 2.0) -> torch.Tensor:
     return total_norm
 
 
-def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler):
+def save_model(args, epoch, model, optimizer, loss_scaler):
     output_dir = Path(args.savedir)
     epoch_name = str(epoch)
     if os.path.exists('{}/{}'.format(args.savedir, 'checkpoint-%s.pth' % epoch_name)):
         os.remove('{}/{}'.format(args.savedir, 'checkpoint-%s.pth' % epoch_name))
+
+    
     if loss_scaler is not None:
         checkpoint_paths = [output_dir / ('checkpoint-%s.pth' % epoch_name)]
+
         for checkpoint_path in checkpoint_paths:
-            to_save = {
-                'model': model_without_ddp.state_dict(),
+            if isinstance(model, nn.DataParallel) or isinstance(model, nn.parallel.DistributedDataParallel):
+                to_save = {
+                'model': model.module.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'epoch': epoch,
+                'scaler': loss_scaler.state_dict(),
+                'args': args,
+            }
+            else:
+                to_save = {
+                'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch,
                 'scaler': loss_scaler.state_dict(),
@@ -323,7 +336,12 @@ def load_model(args, model_without_ddp, optimizer, loss_scaler):
                 args.resume, map_location='cpu', check_hash=True)
         else:
             checkpoint = torch.load(args.resume, map_location='cpu')
-        model_without_ddp.load_state_dict(checkpoint['model'])
+
+        if args.multi_gpu:
+            model_without_ddp.module.load_state_dict(checkpoint['model'])
+        else:
+            model_without_ddp.load_state_dict(checkpoint['model'])
+
         print("Resume checkpoint %s" % args.resume)
         if 'optimizer' in checkpoint and 'epoch' in checkpoint and not (hasattr(args, 'eval') and args.eval):
             optimizer.load_state_dict(checkpoint['optimizer'])
